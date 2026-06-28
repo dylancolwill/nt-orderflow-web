@@ -96,29 +96,37 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
         protected override void OnBarUpdate()
         {
             if (BarsInProgress != 0) return;
-
-            // Historical: one update per bar is enough; realtime updates the forming bar each tick.
-            if (State == State.Historical && !IsFirstTickOfBar) return;
             if (CurrentBar < 0) return;
 
-            long   t = ToUnixUtc(Time[0]);
-            double o = Open[0], h = High[0], l = Low[0], c = Close[0];
-            long   v = (long)Volume[0];
+            // With Tick Replay on, OnBarUpdate fires per tick during State.Historical, so sampling
+            // the first tick gives O=H=L=C (flat bars). Instead: when a new bar starts, record the
+            // PREVIOUS bar [1] from its now-final OHLC; always keep the forming bar [0] up to date.
+            if (IsFirstTickOfBar && CurrentBar >= 1)
+                UpsertBar(Time[1], Open[1], High[1], Low[1], Close[1], (long)Volume[1]);
+
+            UpsertBar(Time[0], Open[0], High[0], Low[0], Close[0], (long)Volume[0]);
+        }
+
+        // Insert-or-update a bar keyed by timestamp. The forming bar [0] is always the last entry
+        // (O(1) update); the just-completed bar [1] is found near the end.
+        private void UpsertBar(DateTime time, double o, double h, double l, double c, long v)
+        {
+            long     t  = ToUnixUtc(time);
+            BarData  bd = new BarData { T = t, O = o, H = h, L = l, C = c, V = v };
 
             lock (_lock)
             {
                 int n = _bars.Count;
-                if (n > 0 && _bars[n - 1].T == t)
+                if (n > 0 && _bars[n - 1].T == t) { _bars[n - 1] = bd; return; }   // update forming/last
+                if (n > 0 && _bars[n - 1].T >  t)                                   // update an earlier bar
                 {
-                    // Update the forming/last bar in place.
-                    _bars[n - 1] = new BarData { T = t, O = o, H = h, L = l, C = c, V = v };
+                    for (int i = n - 1; i >= 0 && i >= n - 4; i--)
+                        if (_bars[i].T == t) { _bars[i] = bd; return; }
+                    return; // too old to matter
                 }
-                else
-                {
-                    _bars.Add(new BarData { T = t, O = o, H = h, L = l, C = c, V = v });
-                    int trim = _bars.Count - BarsToSend;
-                    if (trim > 0) _bars.RemoveRange(0, trim);
-                }
+                _bars.Add(bd);                                                      // new bar
+                int trim = _bars.Count - BarsToSend;
+                if (trim > 0) _bars.RemoveRange(0, trim);
             }
         }
 
@@ -246,60 +254,3 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
         #endregion
     }
 }
-
-#region NinjaScript generated code. Neither change nor remove.
-
-namespace NinjaTrader.NinjaScript.Indicators
-{
-	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
-	{
-		private Dylan.WebBridge[] cacheWebBridge;
-		public Dylan.WebBridge WebBridge(string relayUrl, string authToken, int updateIntervalSeconds, int barsToSend, bool enableDebug)
-		{
-			return WebBridge(Input, relayUrl, authToken, updateIntervalSeconds, barsToSend, enableDebug);
-		}
-
-		public Dylan.WebBridge WebBridge(ISeries<double> input, string relayUrl, string authToken, int updateIntervalSeconds, int barsToSend, bool enableDebug)
-		{
-			if (cacheWebBridge != null)
-				for (int idx = 0; idx < cacheWebBridge.Length; idx++)
-					if (cacheWebBridge[idx] != null && cacheWebBridge[idx].RelayUrl == relayUrl && cacheWebBridge[idx].AuthToken == authToken && cacheWebBridge[idx].UpdateIntervalSeconds == updateIntervalSeconds && cacheWebBridge[idx].BarsToSend == barsToSend && cacheWebBridge[idx].EnableDebug == enableDebug && cacheWebBridge[idx].EqualsInput(input))
-						return cacheWebBridge[idx];
-			return CacheIndicator<Dylan.WebBridge>(new Dylan.WebBridge(){ RelayUrl = relayUrl, AuthToken = authToken, UpdateIntervalSeconds = updateIntervalSeconds, BarsToSend = barsToSend, EnableDebug = enableDebug }, input, ref cacheWebBridge);
-		}
-	}
-}
-
-namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
-{
-	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
-	{
-		public Indicators.Dylan.WebBridge WebBridge(string relayUrl, string authToken, int updateIntervalSeconds, int barsToSend, bool enableDebug)
-		{
-			return indicator.WebBridge(Input, relayUrl, authToken, updateIntervalSeconds, barsToSend, enableDebug);
-		}
-
-		public Indicators.Dylan.WebBridge WebBridge(ISeries<double> input , string relayUrl, string authToken, int updateIntervalSeconds, int barsToSend, bool enableDebug)
-		{
-			return indicator.WebBridge(input, relayUrl, authToken, updateIntervalSeconds, barsToSend, enableDebug);
-		}
-	}
-}
-
-namespace NinjaTrader.NinjaScript.Strategies
-{
-	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
-	{
-		public Indicators.Dylan.WebBridge WebBridge(string relayUrl, string authToken, int updateIntervalSeconds, int barsToSend, bool enableDebug)
-		{
-			return indicator.WebBridge(Input, relayUrl, authToken, updateIntervalSeconds, barsToSend, enableDebug);
-		}
-
-		public Indicators.Dylan.WebBridge WebBridge(ISeries<double> input , string relayUrl, string authToken, int updateIntervalSeconds, int barsToSend, bool enableDebug)
-		{
-			return indicator.WebBridge(input, relayUrl, authToken, updateIntervalSeconds, barsToSend, enableDebug);
-		}
-	}
-}
-
-#endregion
