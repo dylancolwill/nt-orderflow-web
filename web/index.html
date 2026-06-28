@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+  <meta name="theme-color" content="#0e0f12" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <title>OrderFlow</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: #0e0f12; color: #d7d9dd;
+      font: 13px/1.4 -apple-system, system-ui, sans-serif; overflow: hidden; }
+    #app { display: flex; flex-direction: column; height: 100dvh; }
+    #bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+      padding-top: calc(8px + env(safe-area-inset-top)); background: #15171b;
+      border-bottom: 1px solid #23262c; }
+    #sym { font-weight: 600; }
+    #dot { width: 9px; height: 9px; border-radius: 50%; background: #c0392b; flex: 0 0 auto; }
+    #dot.ok { background: #27ae60; }
+    #age { margin-left: auto; color: #8a8f98; font-variant-numeric: tabular-nums; }
+    #chart { flex: 1 1 auto; min-height: 0; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="bar">
+      <span id="dot"></span>
+      <span id="sym">—</span>
+      <span id="status">connecting…</span>
+      <span id="age"></span>
+    </div>
+    <div id="chart"></div>
+  </div>
+
+  <!-- TradingView Lightweight Charts v4 (standalone). v4 has addCandlestickSeries(); -->
+  <!-- v5 moved to addSeries(CandlestickSeries, ...). Pinned for API stability. -->
+  <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
