@@ -43,6 +43,16 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
         private readonly Dictionary<long, Dictionary<double, long[]>> _fp =
             new Dictionary<long, Dictionary<double, long[]>>();
 
+        // Daily (current-session) volume profile — price -> total volume. Reset each session. Same _lock.
+        private readonly Dictionary<double, long> _vp = new Dictionary<double, long>();
+        private long   _vpTotal;
+        private double _vwapNum, _vwapDen;
+        private const double ValueAreaPct = 0.70;
+
+        // Developing VWAP / VPOC — value per bar-ts as the session built up. Reset each session.
+        private readonly Dictionary<long, double> _devVwap = new Dictionary<long, double>();
+        private readonly Dictionary<long, double> _devPoc  = new Dictionary<long, double>();
+
         // Historical-footprint diagnostics (EnableDebug)
         private long _dbgHistCalls, _dbgHistTicks, _dbgHistBuy, _dbgHistSell, _dbgHistSkip, _dbgHistZeroQuote;
         private int  _dbgHistSamples;
@@ -120,11 +130,18 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
                 if (CurrentBar < 0) return;
                 if (EnableDebug && State == State.Historical) _dbgHistCalls++;
 
+                // New trading day/session — reset the daily volume profile + VWAP + developing lines.
+                if (IsFirstTickOfBar && Bars.IsFirstBarOfSession)
+                    lock (_lock) { _vp.Clear(); _vpTotal = 0; _vwapNum = 0; _vwapDen = 0; _devVwap.Clear(); _devPoc.Clear(); }
+
                 // With Tick Replay/OnEachTick, OnBarUpdate fires per tick, so sampling the first
                 // tick gives O=H=L=C. Record the PREVIOUS bar [1] from its final OHLC when a new bar
                 // starts; always keep the forming bar [0] up to date.
                 if (IsFirstTickOfBar && CurrentBar >= 1)
+                {
                     UpsertBar(Time[1], Open[1], High[1], Low[1], Close[1], (long)Volume[1]);
+                    lock (_lock) StoreDevLocked(ToUnixUtc(Time[1]));   // snapshot developing VWAP/POC at bar close
+                }
 
                 UpsertBar(Time[0], Open[0], High[0], Low[0], Close[0], (long)Volume[0]);
 
@@ -143,7 +160,6 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
         // it lines up with the candles. Mirrors VolumeDeltaTable's AccumulateTick.
         private void AccumulateFootprintTick()
         {
-            if (FootprintBars <= 0) return;
             if (CurrentBars[1] < 0 || CurrentBars[0] < 0) return;
 
             int    bar   = CurrentBars[1];
@@ -152,6 +168,19 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
             double ask   = BarsArray[1].GetAsk(bar);
             double bid   = BarsArray[1].GetBid(bar);
             if (vol <= 0) return;
+
+            double rpAll = Instrument.MasterInstrument.RoundToTickSize(price);
+
+            // Daily volume profile + VWAP — count all volume (even ticks between quotes).
+            lock (_lock)
+            {
+                long cur; _vp.TryGetValue(rpAll, out cur); _vp[rpAll] = cur + vol;
+                _vpTotal += vol;
+                _vwapNum += price * vol;
+                _vwapDen += vol;
+            }
+
+            if (FootprintBars <= 0) return;
 
             bool buy  = ask > 0 && price >= ask;
             bool sell = bid > 0 && price <= bid;
@@ -339,8 +368,96 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
                 sb.Append('}');
             }
 
+            // vp (daily/current-session volume profile): { poc, vah, val, vwap, rows: { "<price>": vol } }
+            if (_vpTotal > 0)
+            {
+                double poc, vah, val;
+                ComputeVp(out poc, out vah, out val);
+                double vwap = _vwapDen > 0 ? _vwapNum / _vwapDen : 0;
+
+                sb.Append(",\"vp\":{");
+                sb.Append("\"poc\":").Append(poc.ToString(CultureInfo.InvariantCulture));
+                sb.Append(",\"vah\":").Append(vah.ToString(CultureInfo.InvariantCulture));
+                sb.Append(",\"val\":").Append(val.ToString(CultureInfo.InvariantCulture));
+                sb.Append(",\"vwap\":").Append(vwap.ToString(CultureInfo.InvariantCulture));
+                sb.Append(",\"rows\":{");
+                bool firstVp = true;
+                foreach (var row in _vp)
+                {
+                    if (!firstVp) sb.Append(',');
+                    firstVp = false;
+                    sb.Append('"').Append(row.Key.ToString(CultureInfo.InvariantCulture)).Append("\":").Append(row.Value);
+                }
+                sb.Append("}}");
+
+                // Developing VWAP / VPOC lines: pin the forming bar's point to the current value,
+                // then emit one {t,v} per sent bar that has a developing value.
+                if (_bars.Count > 0) { long nt = _bars[_bars.Count - 1].T; _devVwap[nt] = vwap; _devPoc[nt] = poc; }
+
+                sb.Append(",\"dev\":{\"vwap\":[");
+                bool fv = true;
+                foreach (BarData b in _bars)
+                {
+                    double v;
+                    if (!_devVwap.TryGetValue(b.T, out v)) continue;
+                    if (!fv) sb.Append(','); fv = false;
+                    sb.Append("{\"t\":").Append(b.T).Append(",\"v\":").Append(v.ToString(CultureInfo.InvariantCulture)).Append('}');
+                }
+                sb.Append("],\"poc\":[");
+                bool fp = true;
+                foreach (BarData b in _bars)
+                {
+                    double v;
+                    if (!_devPoc.TryGetValue(b.T, out v)) continue;
+                    if (!fp) sb.Append(','); fp = false;
+                    sb.Append("{\"t\":").Append(b.T).Append(",\"v\":").Append(v.ToString(CultureInfo.InvariantCulture)).Append('}');
+                }
+                sb.Append("]}");
+            }
+
             sb.Append('}');
             return sb.ToString();
+        }
+
+        // Snapshot developing VWAP + VPOC for a bar (caller holds _lock).
+        private void StoreDevLocked(long ts)
+        {
+            double vwap = _vwapDen > 0 ? _vwapNum / _vwapDen : 0;
+            double poc = 0; long mx = 0;
+            foreach (var kv in _vp) if (kv.Value > mx) { mx = kv.Value; poc = kv.Key; }
+            if (vwap > 0) _devVwap[ts] = vwap;
+            if (poc  > 0) _devPoc[ts]  = poc;
+        }
+
+        // POC / value-area high+low from the daily profile (caller holds _lock). Ports FlowAnalysis.RecalcVP.
+        private void ComputeVp(out double poc, out double vah, out double val)
+        {
+            poc = vah = val = 0;
+            if (_vp.Count == 0 || _vpTotal == 0) return;
+
+            long maxVol = 0;
+            foreach (var kv in _vp) if (kv.Value > maxVol) { maxVol = kv.Value; poc = kv.Key; }
+
+            var sorted = new List<double>(_vp.Keys);
+            sorted.Sort();                       // ascending price
+            int pi = sorted.IndexOf(poc);
+            if (pi < 0) { vah = val = poc; return; }
+
+            long target = (long)(_vpTotal * ValueAreaPct);
+            long vaVol  = _vp[poc];
+            int hi = pi, lo = pi;
+            while (vaVol < target)
+            {
+                bool canUp = hi + 1 < sorted.Count;
+                bool canDn = lo - 1 >= 0;
+                if (!canUp && !canDn) break;
+                long upV = canUp ? _vp[sorted[hi + 1]] : 0;
+                long dnV = canDn ? _vp[sorted[lo - 1]] : 0;
+                if (canUp && (!canDn || upV >= dnV)) vaVol += _vp[sorted[++hi]];
+                else                                 vaVol += _vp[sorted[--lo]];
+            }
+            vah = sorted[hi];
+            val = sorted[lo];
         }
 
         private static void AppendJsonString(StringBuilder sb, string s)

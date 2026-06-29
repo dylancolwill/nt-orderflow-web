@@ -105,10 +105,10 @@
           var dShare = Math.min(1, Math.abs(delta) / maxTot);
 
           // left half: total (neutral heatmap)
-          ctx.fillStyle = 'rgba(120,140,170,' + (0.10 + 0.45 * totShare).toFixed(3) + ')';
+          ctx.fillStyle = 'rgba(120,140,170,' + (0.16 + 0.58 * totShare).toFixed(3) + ')';
           ctx.fillRect(x - hw, y - rh / 2, hw, rh);
           // right half: delta (green if buyers, red if sellers)
-          ctx.fillStyle = (delta >= 0 ? 'rgba(38,166,154,' : 'rgba(239,83,80,') + (0.10 + 0.50 * dShare).toFixed(3) + ')';
+          ctx.fillStyle = (delta >= 0 ? 'rgba(38,166,154,' : 'rgba(239,83,80,') + (0.18 + 0.70 * dShare).toFixed(3) + ')';
           ctx.fillRect(x, y - rh / 2, hw, rh);
 
           if (price === pocPrice) {

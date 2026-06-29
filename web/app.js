@@ -20,7 +20,8 @@
   });
 
   var series = chart.addCandlestickSeries({
-    upColor: '#26a69a', downColor: '#ef5350',
+    // Hollow candles: transparent bodies (outline only) so footprint shows through.
+    upColor: 'rgba(0,0,0,0)', downColor: 'rgba(0,0,0,0)',
     borderUpColor: '#26a69a', borderDownColor: '#ef5350',
     wickUpColor: '#26a69a', wickDownColor: '#ef5350',
   });
@@ -34,6 +35,55 @@
     var on = !footprint.isVisible();
     footprint.setVisible(on);
     elFpBtn.classList.toggle('on', on);
+  });
+
+  // Daily volume profile: histogram (primitive, behind candles), VAH/VAL level lines, and
+  // developing VWAP / VPOC lines that snake across the session.
+  var vpProfile = new VpPrimitive();
+  series.attachPrimitive(vpProfile);
+  var vpLines = null;
+
+  var devVwapSeries = chart.addLineSeries({
+    color: '#42a5f5', lineWidth: 2, priceLineVisible: false, lastValueVisible: true,
+    crosshairMarkerVisible: false, title: 'VWAP',
+  });
+  var devPocSeries = chart.addLineSeries({
+    color: '#ffd54f', lineWidth: 2, priceLineVisible: false, lastValueVisible: true,
+    crosshairMarkerVisible: false, title: 'VPOC',
+  });
+
+  function applyVp(vp, tick) {
+    vpProfile.setData(vp || null, tick);
+    if (!vp) return;
+    var LS = LightweightCharts.LineStyle;
+    if (!vpLines) {
+      vpLines = {
+        vah: series.createPriceLine({ price: vp.vah, color: '#66bb6a', lineWidth: 1, lineStyle: LS.Dashed, axisLabelVisible: true, title: 'VAH' }),
+        val: series.createPriceLine({ price: vp.val, color: '#66bb6a', lineWidth: 1, lineStyle: LS.Dashed, axisLabelVisible: true, title: 'VAL' }),
+      };
+    } else {
+      vpLines.vah.applyOptions({ price: vp.vah });
+      vpLines.val.applyOptions({ price: vp.val });
+    }
+  }
+
+  function applyDev(dev) {
+    if (!dev) { devVwapSeries.setData([]); devPocSeries.setData([]); return; }
+    var toLine = function (a) { return (a || []).map(function (p) { return { time: p.t, value: p.v }; }); };
+    devVwapSeries.setData(toLine(dev.vwap));
+    devPocSeries.setData(toLine(dev.poc));
+  }
+
+  var elVpBtn = document.getElementById('vp-btn');
+  elVpBtn.addEventListener('click', function () {
+    var on = !vpProfile.isVisible();
+    vpProfile.setVisible(on);
+    if (vpLines) Object.keys(vpLines).forEach(function (k) {
+      vpLines[k].applyOptions({ lineVisible: on, axisLabelVisible: on });
+    });
+    devVwapSeries.applyOptions({ visible: on });
+    devPocSeries.applyOptions({ visible: on });
+    elVpBtn.classList.toggle('on', on);
   });
 
   var didFit = false;
@@ -62,6 +112,8 @@
     }
     series.setData(data);
     footprint.setData(snap.footprint || null, snap.tickSize);
+    applyVp(snap.vp, snap.tickSize);
+    applyDev(snap.dev);
     if (!didFit) { chart.timeScale().fitContent(); didFit = true; }
     lastUpdate = Date.now();
   }
