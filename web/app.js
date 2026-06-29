@@ -86,6 +86,29 @@
     elVpBtn.classList.toggle('on', on);
   });
 
+  // CVD: cumulative delta in a bottom strip (overlay price scale, shares the main time axis).
+  series.priceScale().applyOptions({ scaleMargins: { top: 0.06, bottom: 0.26 } });
+  var cvdSeries = chart.addCandlestickSeries({
+    priceScaleId: 'cvd',
+    upColor: '#26a69a', downColor: '#ef5350',
+    borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+    wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+    priceLineVisible: false, lastValueVisible: true,
+  });
+  chart.priceScale('cvd').applyOptions({ scaleMargins: { top: 0.80, bottom: 0.0 } });
+
+  function applyCvd(arr) {
+    cvdSeries.setData(!arr ? [] : arr.map(function (p) {
+      return { time: p.t, open: p.o, high: p.h, low: p.l, close: p.c };
+    }));
+  }
+
+  var elCvdBtn = document.getElementById('cvd-btn');
+  elCvdBtn.addEventListener('click', function () {
+    var on = elCvdBtn.classList.toggle('on');
+    cvdSeries.applyOptions({ visible: on });
+  });
+
   var didFit = false;
   var lastTick = null;
 
@@ -114,6 +137,7 @@
     footprint.setData(snap.footprint || null, snap.tickSize);
     applyVp(snap.vp, snap.tickSize);
     applyDev(snap.dev);
+    applyCvd(snap.cvd);
     if (!didFit) { chart.timeScale().fitContent(); didFit = true; }
     lastUpdate = Date.now();
   }

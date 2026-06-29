@@ -53,6 +53,11 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
         private readonly Dictionary<long, double> _devVwap = new Dictionary<long, double>();
         private readonly Dictionary<long, double> _devPoc  = new Dictionary<long, double>();
 
+        // Cumulative volume delta (session). _cvd runs; _cvdBar holds per bar-ts OHLC of the running
+        // CVD so the web can draw delta candles. [0]=open [1]=high [2]=low [3]=close.
+        private long _cvd;
+        private readonly Dictionary<long, double[]> _cvdBar = new Dictionary<long, double[]>();
+
         // Historical-footprint diagnostics (EnableDebug)
         private long _dbgHistCalls, _dbgHistTicks, _dbgHistBuy, _dbgHistSell, _dbgHistSkip, _dbgHistZeroQuote;
         private int  _dbgHistSamples;
@@ -132,7 +137,7 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
 
                 // New trading day/session — reset the daily volume profile + VWAP + developing lines.
                 if (IsFirstTickOfBar && Bars.IsFirstBarOfSession)
-                    lock (_lock) { _vp.Clear(); _vpTotal = 0; _vwapNum = 0; _vwapDen = 0; _devVwap.Clear(); _devPoc.Clear(); }
+                    lock (_lock) { _vp.Clear(); _vpTotal = 0; _vwapNum = 0; _vwapDen = 0; _devVwap.Clear(); _devPoc.Clear(); _cvd = 0; _cvdBar.Clear(); }
 
                 // With Tick Replay/OnEachTick, OnBarUpdate fires per tick, so sampling the first
                 // tick gives O=H=L=C. Record the PREVIOUS bar [1] from its final OHLC when a new bar
@@ -180,8 +185,6 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
                 _vwapDen += vol;
             }
 
-            if (FootprintBars <= 0) return;
-
             bool buy  = ask > 0 && price >= ask;
             bool sell = bid > 0 && price <= bid;
 
@@ -201,15 +204,31 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
             if (buy == sell) { if (hist) _dbgHistSkip++; return; } // between quotes / locked — skip
             if (hist) { if (buy) _dbgHistBuy++; else _dbgHistSell++; }
 
-            long   ts = ToUnixUtc(Times[0][0]);                    // primary bar this tick belongs to
-            double rp = Instrument.MasterInstrument.RoundToTickSize(price);
+            long ts = ToUnixUtc(Times[0][0]);                      // primary bar this tick belongs to
             lock (_lock)
             {
-                Dictionary<double, long[]> rows;
-                if (!_fp.TryGetValue(ts, out rows)) { rows = new Dictionary<double, long[]>(); _fp[ts] = rows; }
-                long[] ba;
-                if (!rows.TryGetValue(rp, out ba)) { ba = new long[2]; rows[rp] = ba; }
-                if (buy) ba[1] += vol; else ba[0] += vol;          // [0]=bid (sell), [1]=ask (buy)
+                // Cumulative delta (runs regardless of the footprint toggle) as per-bar OHLC.
+                double before = _cvd;
+                _cvd += buy ? vol : -vol;
+                double[] ohlc;
+                if (!_cvdBar.TryGetValue(ts, out ohlc))
+                    _cvdBar[ts] = new double[] { before, Math.Max(before, _cvd), Math.Min(before, _cvd), _cvd };
+                else
+                {
+                    if (_cvd > ohlc[1]) ohlc[1] = _cvd;
+                    if (_cvd < ohlc[2]) ohlc[2] = _cvd;
+                    ohlc[3] = _cvd;
+                }
+
+                // Per-bar footprint cells (only when enabled).
+                if (FootprintBars > 0)
+                {
+                    Dictionary<double, long[]> rows;
+                    if (!_fp.TryGetValue(ts, out rows)) { rows = new Dictionary<double, long[]>(); _fp[ts] = rows; }
+                    long[] ba;
+                    if (!rows.TryGetValue(rpAll, out ba)) { ba = new long[2]; rows[rpAll] = ba; }
+                    if (buy) ba[1] += vol; else ba[0] += vol;      // [0]=bid (sell), [1]=ask (buy)
+                }
             }
         }
 
@@ -413,6 +432,25 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
                     sb.Append("{\"t\":").Append(b.T).Append(",\"v\":").Append(v.ToString(CultureInfo.InvariantCulture)).Append('}');
                 }
                 sb.Append("]}");
+            }
+
+            // cvd: cumulative volume delta candles — { t, o, h, l, c } per sent bar. Own pane on the web.
+            if (_cvdBar.Count > 0)
+            {
+                sb.Append(",\"cvd\":[");
+                bool fc = true;
+                foreach (BarData b in _bars)
+                {
+                    double[] o;
+                    if (!_cvdBar.TryGetValue(b.T, out o)) continue;
+                    if (!fc) sb.Append(','); fc = false;
+                    sb.Append("{\"t\":").Append(b.T)
+                      .Append(",\"o\":").Append(o[0].ToString(CultureInfo.InvariantCulture))
+                      .Append(",\"h\":").Append(o[1].ToString(CultureInfo.InvariantCulture))
+                      .Append(",\"l\":").Append(o[2].ToString(CultureInfo.InvariantCulture))
+                      .Append(",\"c\":").Append(o[3].ToString(CultureInfo.InvariantCulture)).Append('}');
+                }
+                sb.Append(']');
             }
 
             sb.Append('}');
