@@ -4,12 +4,15 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Globalization;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
+using System.Windows.Media;
 using NinjaTrader.Data;
 using NinjaTrader.Gui;
 using NinjaTrader.NinjaScript;
+using NinjaTrader.NinjaScript.DrawingTools;
 #endregion
 
 // WebBridge — exports a light JSON snapshot of the chart to the orderflow-web relay every N seconds.
@@ -57,6 +60,10 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
         // CVD so the web can draw delta candles. [0]=open [1]=high [2]=low [3]=close.
         private long _cvd;
         private readonly Dictionary<long, double[]> _cvdBar = new Dictionary<long, double[]>();
+
+        // Hand-drawn levels/zones/trendlines, scanned from the chart's DrawObjects. Prebuilt JSON.
+        private string   _drawJson = "";
+        private DateTime _lastLevelScan = DateTime.MinValue;
 
         // Historical-footprint diagnostics (EnableDebug)
         private long _dbgHistCalls, _dbgHistTicks, _dbgHistBuy, _dbgHistSell, _dbgHistSkip, _dbgHistZeroQuote;
@@ -151,11 +158,129 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
                 UpsertBar(Time[0], Open[0], High[0], Low[0], Close[0], (long)Volume[0]);
 
                 if (IsFirstTickOfBar) TrimFootprint();
+
+                // Re-scan hand-drawn levels at most ~1/s so newly drawn lines show up promptly.
+                if ((DateTime.Now - _lastLevelScan).TotalSeconds >= 1)
+                {
+                    _lastLevelScan = DateTime.Now;
+                    ScanDrawings();
+                }
             }
             // ── 1-tick series — accumulate footprint ──────────────────────────
             else if (BarsInProgress == 1)
             {
                 AccumulateFootprintTick();
+            }
+        }
+
+        // ─── Hand-drawn levels (NT data thread) ──────────────────────────────────
+        // Scan the chart's DrawObjects into prebuilt JSON, preserving colour/dash/width so the web
+        // renders them identically. Horizontal lines + flat rays/lines -> levels; rectangles ->
+        // zones; sloped rays/lines -> trend segments. Mirrors FlowAnalysis.ScanLevels.
+        private void ScanDrawings()
+        {
+            if (ChartControl == null) return;
+
+            var lv = new StringBuilder(); bool fl = true;
+            var zn = new StringBuilder(); bool fz = true;
+            var tr = new StringBuilder(); bool ft = true;
+
+            try
+            {
+            foreach (DrawingTool dt in DrawObjects)
+            {
+                try
+                {
+                    if (!dt.IsVisible) continue;
+                    string tag = dt.Tag ?? "";
+
+                    if (dt is HorizontalLine h)
+                    {
+                        AppendLevel(lv, ref fl, h.Anchors.First().Price, h.Stroke, tag);
+                    }
+                    else if (dt is Ray ray && ray.Anchors.Count() >= 2)
+                    {
+                        var a0 = ray.Anchors.ElementAt(0); var a1 = ray.Anchors.ElementAt(1);
+                        if (Math.Abs(a0.Price - a1.Price) < _tickSize * 0.5) AppendLevel(lv, ref fl, a0.Price, ray.Stroke, tag);
+                        else AppendTrend(tr, ref ft, a0, a1, ray.Stroke, tag);
+                    }
+                    else if (dt is Line ln && ln.Anchors.Count() >= 2)
+                    {
+                        var a0 = ln.Anchors.ElementAt(0); var a1 = ln.Anchors.ElementAt(1);
+                        if (Math.Abs(a0.Price - a1.Price) < _tickSize * 0.5) AppendLevel(lv, ref fl, a0.Price, ln.Stroke, tag);
+                        else AppendTrend(tr, ref ft, a0, a1, ln.Stroke, tag);
+                    }
+                    else if (dt is ExtendedRectangle exr)
+                    {
+                        AppendZone(zn, ref fz, exr.StartAnchor.Price, exr.EndAnchor.Price, exr.AreaBrush, exr.AreaOpacity, tag);
+                    }
+                    else if (dt is Rectangle rect && rect.Anchors.Count() >= 2)
+                    {
+                        AppendZone(zn, ref fz, rect.Anchors.ElementAt(0).Price, rect.Anchors.ElementAt(1).Price, rect.AreaBrush, rect.AreaOpacity, tag);
+                    }
+                }
+                catch { }
+            }
+            }
+            catch { return; } // DrawObjects modified mid-scan — keep last good _drawJson
+
+            string j = "\"draw\":{\"levels\":[" + lv + "],\"zones\":[" + zn + "],\"trends\":[" + tr + "]}";
+            lock (_lock) { _drawJson = j; }
+        }
+
+        private void AppendLevel(StringBuilder sb, ref bool first, double price, Stroke stroke, string tag)
+        {
+            if (!first) sb.Append(','); first = false;
+            sb.Append("{\"price\":").Append(price.ToString(CultureInfo.InvariantCulture));
+            sb.Append(",\"color\":"); AppendJsonString(sb, ColorCss(stroke?.Brush));
+            sb.Append(",\"style\":\"").Append(DashCss(stroke)).Append('"');
+            sb.Append(",\"width\":").Append(((stroke != null ? stroke.Width : 1)).ToString(CultureInfo.InvariantCulture));
+            sb.Append(",\"label\":"); AppendJsonString(sb, tag);
+            sb.Append('}');
+        }
+
+        private void AppendTrend(StringBuilder sb, ref bool first, ChartAnchor a0, ChartAnchor a1, Stroke stroke, string tag)
+        {
+            if (!first) sb.Append(','); first = false;
+            sb.Append("{\"t1\":").Append(ToUnixUtc(a0.Time)).Append(",\"p1\":").Append(a0.Price.ToString(CultureInfo.InvariantCulture));
+            sb.Append(",\"t2\":").Append(ToUnixUtc(a1.Time)).Append(",\"p2\":").Append(a1.Price.ToString(CultureInfo.InvariantCulture));
+            sb.Append(",\"color\":"); AppendJsonString(sb, ColorCss(stroke?.Brush));
+            sb.Append(",\"style\":\"").Append(DashCss(stroke)).Append('"');
+            sb.Append(",\"width\":").Append(((stroke != null ? stroke.Width : 1)).ToString(CultureInfo.InvariantCulture));
+            sb.Append(",\"label\":"); AppendJsonString(sb, tag);
+            sb.Append('}');
+        }
+
+        private void AppendZone(StringBuilder sb, ref bool first, double pa, double pb, Brush areaBrush, int areaOpacity, string tag)
+        {
+            double p1 = Math.Max(pa, pb), p2 = Math.Min(pa, pb);
+            if (!first) sb.Append(','); first = false;
+            sb.Append("{\"p1\":").Append(p1.ToString(CultureInfo.InvariantCulture));
+            sb.Append(",\"p2\":").Append(p2.ToString(CultureInfo.InvariantCulture));
+            sb.Append(",\"color\":"); AppendJsonString(sb, ColorCss(areaBrush, areaOpacity / 100.0));
+            sb.Append(",\"label\":"); AppendJsonString(sb, tag);
+            sb.Append('}');
+        }
+
+        private static string ColorCss(Brush b, double extraOpacity = 1.0)
+        {
+            var s = b as SolidColorBrush;
+            if (s == null) return "rgba(200,200,200,0.6)";
+            var c = s.Color;
+            double a = (c.A / 255.0) * s.Opacity * extraOpacity;
+            return string.Format(CultureInfo.InvariantCulture, "rgba({0},{1},{2},{3:0.###})", c.R, c.G, c.B, a);
+        }
+
+        private static string DashCss(Stroke st)
+        {
+            if (st == null) return "solid";
+            switch (st.DashStyleHelper)
+            {
+                case DashStyleHelper.Dash:       return "dashed";
+                case DashStyleHelper.Dot:        return "dotted";
+                case DashStyleHelper.DashDot:
+                case DashStyleHelper.DashDotDot: return "dashed";
+                default:                         return "solid";
             }
         }
 
@@ -452,6 +577,9 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
                 }
                 sb.Append(']');
             }
+
+            // draw: hand-drawn levels / zones / trendlines (prebuilt on the data thread).
+            if (_drawJson.Length > 0) sb.Append(',').Append(_drawJson);
 
             sb.Append('}');
             return sb.ToString();

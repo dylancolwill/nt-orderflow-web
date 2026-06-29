@@ -130,6 +130,40 @@
     deltaTable.setVisible(on);
   });
 
+  // Hand-drawn levels (price lines) + zones/trends (primitive), colour/dash/width from NinjaTrader.
+  var drawPrim = new DrawPrimitive();
+  series.attachPrimitive(drawPrim);
+  var levelLines = [];
+  var drawOn = true;
+  var lastDraw = null;
+
+  function styleOf(s) {
+    var LS = LightweightCharts.LineStyle;
+    return s === 'dashed' ? LS.Dashed : s === 'dotted' ? LS.Dotted : LS.Solid;
+  }
+  function clearLevelLines() { levelLines.forEach(function (l) { series.removePriceLine(l); }); levelLines = []; }
+
+  function applyDraw(draw) {
+    if (draw !== undefined) lastDraw = draw;     // remember latest from snapshot
+    clearLevelLines();
+    if (!drawOn) { drawPrim.setData(null); return; }
+    drawPrim.setData(lastDraw || null);
+    if (!lastDraw) return;
+    (lastDraw.levels || []).forEach(function (L) {
+      levelLines.push(series.createPriceLine({
+        price: L.price, color: L.color || '#aaa',
+        lineWidth: Math.max(1, Math.round(L.width || 1)), lineStyle: styleOf(L.style),
+        axisLabelVisible: true, title: L.label || '',
+      }));
+    });
+  }
+
+  var elLvlBtn = document.getElementById('lvl-btn');
+  elLvlBtn.addEventListener('click', function () {
+    drawOn = elLvlBtn.classList.toggle('on');
+    applyDraw();   // re-render with remembered data
+  });
+
   var didFit = false;
   var lastTick = null;
 
@@ -160,6 +194,7 @@
     applyDev(snap.dev);
     applyCvd(snap.cvd);
     applyTable(snap.bars, snap.cvd);
+    applyDraw(snap.draw || null);
     if (!didFit) { chart.timeScale().fitContent(); didFit = true; }
     lastUpdate = Date.now();
   }
