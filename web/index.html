@@ -21,10 +21,10 @@
     #dot { width: 9px; height: 9px; border-radius: 50%; background: #c0392b; flex: 0 0 auto; }
     #dot.ok { background: #27ae60; }
     #age { margin-left: auto; color: #8a8f98; font-variant-numeric: tabular-nums; }
-    #fp-btn { -webkit-appearance: none; appearance: none; border: 1px solid #2c2f36;
+    .tbtn { -webkit-appearance: none; appearance: none; border: 1px solid #2c2f36;
       background: #1b1e24; color: #9aa0aa; border-radius: 6px; padding: 4px 9px;
       font: inherit; font-size: 12px; }
-    #fp-btn.on { background: #233; color: #4fd1c5; border-color: #2c5; }
+    .tbtn.on { background: #233; color: #4fd1c5; border-color: #2c5; }
     #chart { flex: 1 1 auto; min-height: 0; }
   </style>
 </head>
@@ -34,9 +34,10 @@
       <span id="dot"></span>
       <span id="sym">—</span>
       <span id="status">connecting…</span>
-      <button id="fp-btn" class="on">FP</button>
-      <button id="vp-btn" class="on">VP</button>
-      <button id="cvd-btn" class="on">CVD</button>
+      <button id="fp-btn" class="tbtn on">FP</button>
+      <button id="vp-btn" class="tbtn on">VP</button>
+      <button id="cvd-btn" class="tbtn on">CVD</button>
+      <button id="tbl-btn" class="tbtn">TBL</button>
       <span id="age"></span>
     </div>
     <div id="chart"></div>
@@ -47,6 +48,7 @@
   <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
   <script src="/footprint-primitive.js"></script>
   <script src="/vp-primitive.js"></script>
+  <script src="/table-primitive.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

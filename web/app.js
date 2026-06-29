@@ -86,8 +86,9 @@
     elVpBtn.classList.toggle('on', on);
   });
 
-  // CVD: cumulative delta in a bottom strip (overlay price scale, shares the main time axis).
-  series.priceScale().applyOptions({ scaleMargins: { top: 0.06, bottom: 0.26 } });
+  // Layout (fractions of pane height): candles on top, table strip, then a slim CVD strip.
+  series.priceScale().applyOptions({ scaleMargins: { top: 0.05, bottom: 0.28 } });
+  var CVD_TOP = 0.87;   // CVD occupies bottom ~13%
   var cvdSeries = chart.addCandlestickSeries({
     priceScaleId: 'cvd',
     upColor: '#26a69a', downColor: '#ef5350',
@@ -95,7 +96,7 @@
     wickUpColor: '#26a69a', wickDownColor: '#ef5350',
     priceLineVisible: false, lastValueVisible: true,
   });
-  chart.priceScale('cvd').applyOptions({ scaleMargins: { top: 0.80, bottom: 0.0 } });
+  chart.priceScale('cvd').applyOptions({ scaleMargins: { top: CVD_TOP, bottom: 0.0 } });
 
   function applyCvd(arr) {
     cvdSeries.setData(!arr ? [] : arr.map(function (p) {
@@ -107,6 +108,26 @@
   elCvdBtn.addEventListener('click', function () {
     var on = elCvdBtn.classList.toggle('on');
     cvdSeries.applyOptions({ visible: on });
+  });
+
+  // Per-bar delta table (Vol / Δ / CVD) under the bars — derived from bars + cvd, no exporter change.
+  var deltaTable = new TablePrimitive();
+  deltaTable.setBottomFraction(CVD_TOP);   // sit just above the CVD strip
+  series.attachPrimitive(deltaTable);
+
+  function applyTable(bars, cvd) {
+    var cvdMap = {};
+    (cvd || []).forEach(function (p) { cvdMap[p.t] = p; });
+    deltaTable.setData(bars.map(function (b) {
+      var c = cvdMap[b.t];
+      return { t: b.t, vol: b.v, delta: c ? (c.c - c.o) : null, cvd: c ? c.c : null };
+    }));
+  }
+
+  var elTblBtn = document.getElementById('tbl-btn');
+  elTblBtn.addEventListener('click', function () {
+    var on = elTblBtn.classList.toggle('on');
+    deltaTable.setVisible(on);
   });
 
   var didFit = false;
@@ -138,6 +159,7 @@
     applyVp(snap.vp, snap.tickSize);
     applyDev(snap.dev);
     applyCvd(snap.cvd);
+    applyTable(snap.bars, snap.cvd);
     if (!didFit) { chart.timeScale().fitContent(); didFit = true; }
     lastUpdate = Date.now();
   }
