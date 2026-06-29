@@ -164,6 +164,39 @@
     applyDraw();   // re-render with remembered data
   });
 
+  // Accounts popup: connected accounts + realized/unrealized PnL.
+  var elAcctBtn = document.getElementById('acct-btn');
+  var elAcctModal = document.getElementById('acct-modal');
+  var elAcctBody = document.getElementById('acct-body');
+  var elAcctClose = document.getElementById('acct-close');
+  var latestAccounts = [];
+
+  function fmtMoney(n) {
+    return (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function moneyCls(n) { return n > 0 ? 'pos' : n < 0 ? 'neg' : 'dim'; }
+  function escapeHtml(s) { return (s || '').replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+  function renderAccounts() {
+    if (!latestAccounts.length) { elAcctBody.innerHTML = '<div class="dim">No accounts.</div>'; return; }
+    var rows = latestAccounts.map(function (a) {
+      var total = a.realized + a.unrealized;
+      return '<tr>'
+        + '<td><span class="dot2' + (a.connected ? ' ok' : '') + '"></span>' + escapeHtml(a.name) + '</td>'
+        + '<td class="' + moneyCls(a.realized) + '">' + fmtMoney(a.realized) + '</td>'
+        + '<td class="' + moneyCls(a.unrealized) + '">' + fmtMoney(a.unrealized) + '</td>'
+        + '<td class="' + moneyCls(total) + '">' + fmtMoney(total) + '</td>'
+        + '<td class="dim">' + fmtMoney(a.netliq) + '</td>'
+        + '</tr>';
+    }).join('');
+    elAcctBody.innerHTML = '<table class="acct"><thead><tr><th>Account</th><th>Realized</th><th>Unreal.</th>'
+      + '<th>Total</th><th>Net Liq</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  elAcctBtn.addEventListener('click', function () { elAcctModal.classList.remove('hidden'); renderAccounts(); });
+  elAcctClose.addEventListener('click', function () { elAcctModal.classList.add('hidden'); });
+  elAcctModal.addEventListener('click', function (e) { if (e.target === elAcctModal) elAcctModal.classList.add('hidden'); });
+
   var didFit = false;
   var lastTick = null;
 
@@ -195,6 +228,10 @@
     applyCvd(snap.cvd);
     applyTable(snap.bars, snap.cvd);
     applyDraw(snap.draw || null);
+    if (snap.accounts) {
+      latestAccounts = snap.accounts;
+      if (!elAcctModal.classList.contains('hidden')) renderAccounts();
+    }
     if (!didFit) { chart.timeScale().fitContent(); didFit = true; }
     lastUpdate = Date.now();
   }

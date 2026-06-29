@@ -9,6 +9,7 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Windows.Media;
+using NinjaTrader.Cbi;
 using NinjaTrader.Data;
 using NinjaTrader.Gui;
 using NinjaTrader.NinjaScript;
@@ -64,6 +65,9 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
         // Hand-drawn levels/zones/trendlines, scanned from the chart's DrawObjects. Prebuilt JSON.
         private string   _drawJson = "";
         private DateTime _lastLevelScan = DateTime.MinValue;
+
+        // Connected accounts + realized/unrealized PnL. Prebuilt JSON, refreshed with the level scan.
+        private string _accountsJson = "";
 
         // Historical-footprint diagnostics (EnableDebug)
         private long _dbgHistCalls, _dbgHistTicks, _dbgHistBuy, _dbgHistSell, _dbgHistSkip, _dbgHistZeroQuote;
@@ -164,6 +168,7 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
                 {
                     _lastLevelScan = DateTime.Now;
                     ScanDrawings();
+                    ScanAccounts();
                 }
             }
             // ── 1-tick series — accumulate footprint ──────────────────────────
@@ -228,6 +233,44 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
 
             string j = "\"draw\":{\"levels\":[" + lv + "],\"zones\":[" + zn + "],\"trends\":[" + tr + "]}";
             lock (_lock) { _drawJson = j; }
+        }
+
+        // ─── Accounts / PnL (NT data thread) ─────────────────────────────────────
+        private void ScanAccounts()
+        {
+            var sb = new StringBuilder();
+            bool first = true;
+            try
+            {
+                lock (Account.All)
+                {
+                    foreach (Account acc in Account.All)
+                    {
+                        try
+                        {
+                            bool connected = acc.Connection != null && acc.Connection.Status == ConnectionStatus.Connected;
+                            double realized   = acc.Get(AccountItem.RealizedProfitLoss, acc.Denomination);
+                            double netliq     = acc.Get(AccountItem.NetLiquidation,     acc.Denomination);
+                            double unrealized = 0;
+                            lock (acc.Positions)
+                                foreach (Position p in acc.Positions)
+                                    unrealized += p.GetUnrealizedProfitLoss(PerformanceUnit.Currency);
+
+                            if (!first) sb.Append(','); first = false;
+                            sb.Append("{\"name\":"); AppendJsonString(sb, acc.Name);
+                            sb.Append(",\"connected\":").Append(connected ? "true" : "false");
+                            sb.Append(",\"realized\":").Append(realized.ToString(CultureInfo.InvariantCulture));
+                            sb.Append(",\"unrealized\":").Append(unrealized.ToString(CultureInfo.InvariantCulture));
+                            sb.Append(",\"netliq\":").Append(netliq.ToString(CultureInfo.InvariantCulture));
+                            sb.Append('}');
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch { return; }
+
+            lock (_lock) { _accountsJson = "\"accounts\":[" + sb + "]"; }
         }
 
         private void AppendLevel(StringBuilder sb, ref bool first, double price, Stroke stroke, string tag)
@@ -582,6 +625,9 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
 
             // draw: hand-drawn levels / zones / trendlines (prebuilt on the data thread).
             if (_drawJson.Length > 0) sb.Append(',').Append(_drawJson);
+
+            // accounts: connected accounts + realized/unrealized PnL.
+            if (_accountsJson.Length > 0) sb.Append(',').Append(_accountsJson);
 
             sb.Append('}');
             return sb.ToString();
