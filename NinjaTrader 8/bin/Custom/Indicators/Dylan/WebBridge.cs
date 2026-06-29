@@ -193,6 +193,8 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
                 {
                     if (!dt.IsVisible) continue;
                     string tag = dt.Tag ?? "";
+                    // Labeled lines/rays carry the user's typed text — prefer it over the drawing id.
+                    if (dt is LabeledLine ll && !string.IsNullOrEmpty(ll.DisplayText)) tag = ll.DisplayText;
 
                     if (dt is HorizontalLine h)
                     {
