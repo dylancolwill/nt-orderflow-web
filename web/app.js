@@ -25,11 +25,35 @@
     wickUpColor: '#26a69a', wickDownColor: '#ef5350',
   });
 
+  // Footprint overlay (bid/ask per price). Auto-hides when zoomed out.
+  var footprint = new FootprintPrimitive();
+  series.attachPrimitive(footprint);
+
+  var elFpBtn = document.getElementById('fp-btn');
+  elFpBtn.addEventListener('click', function () {
+    var on = !footprint.isVisible();
+    footprint.setVisible(on);
+    elFpBtn.classList.toggle('on', on);
+  });
+
   var didFit = false;
+  var lastTick = null;
+
+  // Set price precision from the instrument tick size so the axis/crosshair show the full price
+  // (e.g. 6E ticks at 0.00005 -> 5 decimals) instead of the default 2.
+  function applyPriceFormat(tick) {
+    if (!tick || tick === lastTick) return;
+    lastTick = tick;
+    var s = String(tick), prec;
+    if (s.indexOf('e') >= 0) prec = Math.max(0, Math.round(-Math.log10(tick)));
+    else { var dot = s.indexOf('.'); prec = dot < 0 ? 0 : s.length - dot - 1; }
+    series.applyOptions({ priceFormat: { type: 'price', precision: prec, minMove: tick } });
+  }
 
   function applySnapshot(snap) {
     if (!snap || !snap.bars || !snap.bars.length) return;
     if (snap.instrument) elSym.textContent = snap.instrument;
+    applyPriceFormat(snap.tickSize);
 
     var data = new Array(snap.bars.length);
     for (var i = 0; i < snap.bars.length; i++) {
@@ -37,6 +61,7 @@
       data[i] = { time: b.t, open: b.o, high: b.h, low: b.l, close: b.c };
     }
     series.setData(data);
+    footprint.setData(snap.footprint || null, snap.tickSize);
     if (!didFit) { chart.timeScale().fitContent(); didFit = true; }
     lastUpdate = Date.now();
   }

@@ -37,6 +37,17 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
         private readonly object         _lock = new object();
         private readonly List<BarData>  _bars = new List<BarData>();
 
+        // Footprint cache — per bar (keyed by unix-ts) a price -> [bid, ask] map. Same _lock.
+        // Derived from ticks (Last classified vs current bid/ask), like FlowAnalysis — no Volumetric
+        // bar type required. Historical footprint needs Tick Replay enabled on the chart.
+        private readonly Dictionary<long, Dictionary<double, long[]>> _fp =
+            new Dictionary<long, Dictionary<double, long[]>>();
+
+        // Historical-footprint diagnostics (EnableDebug)
+        private long _dbgHistCalls, _dbgHistTicks, _dbgHistBuy, _dbgHistSell, _dbgHistSkip, _dbgHistZeroQuote;
+        private int  _dbgHistSamples;
+        private bool _dbgSummaryPrinted;
+
         private HttpClient _http;
         private Timer      _timer;
         private volatile bool _stopping;
@@ -66,7 +77,14 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
                 AuthToken             = "change-me";
                 UpdateIntervalSeconds = 2;
                 BarsToSend            = 120;
+                FootprintBars         = 40;
                 EnableDebug           = true;
+            }
+            else if (State == State.Configure)
+            {
+                // 1-tick series (BarsInProgress == 1) — carries historical bid/ask per tick, which
+                // GetCurrentAsk/Bid do NOT. Same approach as VolumeDeltaTable/CurrentCumulativeDelta.
+                AddDataSeries(BarsPeriodType.Tick, 1);
             }
             else if (State == State.DataLoaded)
             {
@@ -80,6 +98,7 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
                 _timer = new Timer(OnTimer, null,
                     UpdateIntervalSeconds * 1000, UpdateIntervalSeconds * 1000);
                 if (EnableDebug) Print("WebBridge: started — posting to " + RelayUrl + "/ingest every " + UpdateIntervalSeconds + "s");
+                PrintHistoricalSummary();
             }
             else if (State == State.Terminated)
             {
@@ -95,16 +114,110 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
 
         protected override void OnBarUpdate()
         {
-            if (BarsInProgress != 0) return;
-            if (CurrentBar < 0) return;
+            // ── primary chart series — build candles ──────────────────────────
+            if (BarsInProgress == 0)
+            {
+                if (CurrentBar < 0) return;
+                if (EnableDebug && State == State.Historical) _dbgHistCalls++;
 
-            // With Tick Replay on, OnBarUpdate fires per tick during State.Historical, so sampling
-            // the first tick gives O=H=L=C (flat bars). Instead: when a new bar starts, record the
-            // PREVIOUS bar [1] from its now-final OHLC; always keep the forming bar [0] up to date.
-            if (IsFirstTickOfBar && CurrentBar >= 1)
-                UpsertBar(Time[1], Open[1], High[1], Low[1], Close[1], (long)Volume[1]);
+                // With Tick Replay/OnEachTick, OnBarUpdate fires per tick, so sampling the first
+                // tick gives O=H=L=C. Record the PREVIOUS bar [1] from its final OHLC when a new bar
+                // starts; always keep the forming bar [0] up to date.
+                if (IsFirstTickOfBar && CurrentBar >= 1)
+                    UpsertBar(Time[1], Open[1], High[1], Low[1], Close[1], (long)Volume[1]);
 
-            UpsertBar(Time[0], Open[0], High[0], Low[0], Close[0], (long)Volume[0]);
+                UpsertBar(Time[0], Open[0], High[0], Low[0], Close[0], (long)Volume[0]);
+
+                if (IsFirstTickOfBar) TrimFootprint();
+            }
+            // ── 1-tick series — accumulate footprint ──────────────────────────
+            else if (BarsInProgress == 1)
+            {
+                AccumulateFootprintTick();
+            }
+        }
+
+        // ─── Footprint from the 1-tick series (NT data thread) ───────────────────
+        // Classify each trade tick at its bid/ask from BarsArray[1].GetAsk/GetBid(barIndex), which
+        // (unlike GetCurrentAsk/Bid) carry the historical quote. Keyed to the primary bar's time so
+        // it lines up with the candles. Mirrors VolumeDeltaTable's AccumulateTick.
+        private void AccumulateFootprintTick()
+        {
+            if (FootprintBars <= 0) return;
+            if (CurrentBars[1] < 0 || CurrentBars[0] < 0) return;
+
+            int    bar   = CurrentBars[1];
+            double price = BarsArray[1].GetClose(bar);
+            long   vol   = (long)BarsArray[1].GetVolume(bar);
+            double ask   = BarsArray[1].GetAsk(bar);
+            double bid   = BarsArray[1].GetBid(bar);
+            if (vol <= 0) return;
+
+            bool buy  = ask > 0 && price >= ask;
+            bool sell = bid > 0 && price <= bid;
+
+            bool hist = EnableDebug && State == State.Historical;
+            if (hist)
+            {
+                _dbgHistTicks++;
+                if (ask <= 0 || bid <= 0) _dbgHistZeroQuote++;
+                if (_dbgHistSamples < 8)
+                {
+                    _dbgHistSamples++;
+                    Print(string.Format("WebBridge [hist sample] px={0} ask={1} bid={2} vol={3}",
+                          price, ask, bid, vol));
+                }
+            }
+
+            if (buy == sell) { if (hist) _dbgHistSkip++; return; } // between quotes / locked — skip
+            if (hist) { if (buy) _dbgHistBuy++; else _dbgHistSell++; }
+
+            long   ts = ToUnixUtc(Times[0][0]);                    // primary bar this tick belongs to
+            double rp = Instrument.MasterInstrument.RoundToTickSize(price);
+            lock (_lock)
+            {
+                Dictionary<double, long[]> rows;
+                if (!_fp.TryGetValue(ts, out rows)) { rows = new Dictionary<double, long[]>(); _fp[ts] = rows; }
+                long[] ba;
+                if (!rows.TryGetValue(rp, out ba)) { ba = new long[2]; rows[rp] = ba; }
+                if (buy) ba[1] += vol; else ba[0] += vol;          // [0]=bid (sell), [1]=ask (buy)
+            }
+        }
+
+        // One-shot diagnostic at the Historical->Realtime boundary: did Tick Replay feed us ticks,
+        // and did GetCurrentAsk/Bid classify them? Reveals why historical footprint is empty.
+        private void PrintHistoricalSummary()
+        {
+            if (!EnableDebug || _dbgSummaryPrinted) return;
+            _dbgSummaryPrinted = true;
+
+            bool tickReplay = false;
+            try { tickReplay = Bars != null && Bars.IsTickReplay; } catch { }
+
+            int fpBars;
+            lock (_lock) { fpBars = _fp.Count; }
+
+            Print("WebBridge [HIST SUMMARY] ----------------------------------------");
+            Print(string.Format("  primary IsTickReplay = {0}", tickReplay));
+            Print(string.Format("  primary historical OnBarUpdate calls = {0}", _dbgHistCalls));
+            Print(string.Format("  footprint ticks seen (tick series) = {0}  (buy={1} sell={2} skipped-between={3} zero-quote={4})",
+                  _dbgHistTicks, _dbgHistBuy, _dbgHistSell, _dbgHistSkip, _dbgHistZeroQuote));
+            Print(string.Format("  footprint bars built = {0}", fpBars));
+            Print("  Expect: ticks seen >> 0, buy+sell >> 0, footprint bars > 1.");
+            Print("------------------------------------------------------------------");
+        }
+
+        // Keep only the most recent FootprintBars bars of footprint (caller may or may not hold _lock).
+        private void TrimFootprint()
+        {
+            lock (_lock)
+            {
+                if (_fp.Count <= FootprintBars) return;
+                var keys = new List<long>(_fp.Keys);
+                keys.Sort();
+                for (int i = 0; i < keys.Count - FootprintBars; i++)
+                    _fp.Remove(keys[i]);
+            }
         }
 
         // Insert-or-update a bar keyed by timestamp. The forming bar [0] is always the last entry
@@ -200,7 +313,33 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
                 sb.Append(",\"c\":").Append(b.C.ToString(CultureInfo.InvariantCulture));
                 sb.Append(",\"v\":").Append(b.V).Append('}');
             }
-            sb.Append("]}");
+            sb.Append(']');
+
+            // footprint: { "<barTs>": { "<price>": {"b":bid,"a":ask}, ... }, ... }
+            if (_fp.Count > 0)
+            {
+                sb.Append(",\"footprint\":{");
+                bool firstBar = true;
+                foreach (var bar in _fp)
+                {
+                    if (!firstBar) sb.Append(',');
+                    firstBar = false;
+                    sb.Append('"').Append(bar.Key).Append("\":{");
+                    bool firstRow = true;
+                    foreach (var row in bar.Value)
+                    {
+                        if (!firstRow) sb.Append(',');
+                        firstRow = false;
+                        sb.Append('"').Append(row.Key.ToString(CultureInfo.InvariantCulture)).Append("\":{");
+                        sb.Append("\"b\":").Append(row.Value[0]);
+                        sb.Append(",\"a\":").Append(row.Value[1]).Append('}');
+                    }
+                    sb.Append('}');
+                }
+                sb.Append('}');
+            }
+
+            sb.Append('}');
             return sb.ToString();
         }
 
@@ -246,6 +385,12 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
         [Range(10, 1000)]
         [Display(Name = "Bars To Send", Order = 4, GroupName = "Data")]
         public int BarsToSend { get; set; }
+
+        [NinjaScriptProperty]
+        [Range(0, 200)]
+        [Display(Name = "Footprint Bars", Order = 5, GroupName = "Data",
+                 Description = "Send per-price bid/ask footprint (from ticks) for the most recent N bars (0 = off). Historical footprint needs Tick Replay enabled on the chart.")]
+        public int FootprintBars { get; set; }
 
         [NinjaScriptProperty]
         [Display(Name = "Enable Debug", Order = 1, GroupName = "Debug")]
