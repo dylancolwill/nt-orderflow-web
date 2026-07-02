@@ -549,8 +549,9 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
                 if (Instrument != null && Instrument.Expiry > new DateTime(1900, 1, 1))
                 {
                     string exp = Instrument.Expiry.ToString("MM-yy", CultureInfo.InvariantCulture);
+                    Print("WebBridge resolve: trying '" + s + " " + exp + "' (chart expiry)");
                     try { inst = NinjaTrader.Cbi.Instrument.GetInstrument(s + " " + exp); } catch { }
-                    if (inst != null) return inst;
+                    if (inst != null) { Print("WebBridge resolve: found via chart expiry"); return inst; }
                 }
 
                 // Scan upcoming months to find the front-month contract for any futures root
@@ -560,9 +561,11 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
                 {
                     string exp = new DateTime(now.Year, now.Month, 1).AddMonths(offset)
                                      .ToString("MM-yy", CultureInfo.InvariantCulture);
+                    Print("WebBridge resolve: trying '" + s + " " + exp + "'");
                     try { inst = NinjaTrader.Cbi.Instrument.GetInstrument(s + " " + exp); } catch { }
-                    if (inst != null) return inst;
+                    if (inst != null) { Print("WebBridge resolve: found " + s + " " + exp); return inst; }
                 }
+                Print("WebBridge resolve: no contract found for root '" + s + "'");
             }
             return inst;
         }
