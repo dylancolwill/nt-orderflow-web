@@ -532,42 +532,56 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
         }
 
         // Resolve a user-typed value to an instrument. Accepts full names ("ES 09-26"), stocks/forex,
-        // or a bare futures root ("es", "6e", "nq") which is mapped to the current chart's contract month.
+        // or a bare futures root ("es", "6e", "nq") which is mapped to that root's true front-month
+        // contract via the MasterInstrument (NOT a guessed month — GetInstrument will build a valid-
+        // looking object for months a product doesn't actually list, and those load blank).
         private NinjaTrader.Cbi.Instrument ResolveInstrument(string input)
         {
             string s = (input ?? "").Trim().ToUpperInvariant();
             if (s.Length == 0) return null;
 
-            // Try exact name first (e.g. "ES 09-26", stocks, forex).
-            NinjaTrader.Cbi.Instrument inst = null;
-            try { inst = NinjaTrader.Cbi.Instrument.GetInstrument(s); } catch { }
-            if (inst != null) return inst;
-
-            if (!s.Contains(" "))
+            // Full contract given ("ES 09-26", stocks, forex) — trust it as typed.
+            if (s.Contains(" "))
             {
-                // Fast path: same expiry cycle as the current chart (ES -> NQ, ES -> YM, etc.).
-                if (Instrument != null && Instrument.Expiry > new DateTime(1900, 1, 1))
-                {
-                    string exp = Instrument.Expiry.ToString("MM-yy", CultureInfo.InvariantCulture);
-                    Print("WebBridge resolve: trying '" + s + " " + exp + "' (chart expiry)");
-                    try { inst = NinjaTrader.Cbi.Instrument.GetInstrument(s + " " + exp); } catch { }
-                    if (inst != null) { Print("WebBridge resolve: found via chart expiry"); return inst; }
-                }
-
-                // Scan upcoming months to find the front-month contract for any futures root
-                // (handles different expiry cycles: GC, CL, 6E, NG, etc.).
-                DateTime now = DateTime.Now;
-                for (int offset = 0; offset < 12; offset++)
-                {
-                    string exp = new DateTime(now.Year, now.Month, 1).AddMonths(offset)
-                                     .ToString("MM-yy", CultureInfo.InvariantCulture);
-                    Print("WebBridge resolve: trying '" + s + " " + exp + "'");
-                    try { inst = NinjaTrader.Cbi.Instrument.GetInstrument(s + " " + exp); } catch { }
-                    if (inst != null) { Print("WebBridge resolve: found " + s + " " + exp); return inst; }
-                }
-                Print("WebBridge resolve: no contract found for root '" + s + "'");
+                NinjaTrader.Cbi.Instrument full = null;
+                try { full = NinjaTrader.Cbi.Instrument.GetInstrument(s); } catch { }
+                return full;
             }
-            return inst;
+
+            // Bare futures root: find any resolvable contract just to reach the MasterInstrument.
+            NinjaTrader.Cbi.Instrument any = null;
+            DateTime m0 = new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1);
+            for (int off = 0; off < 14 && any == null; off++)
+            {
+                string cand = s + " " + m0.AddMonths(off).ToString("MM-yy", CultureInfo.InvariantCulture);
+                try { any = NinjaTrader.Cbi.Instrument.GetInstrument(cand); } catch { }
+            }
+            if (any == null) { Print("WebBridge resolve: no contract for root '" + s + "'"); return null; }
+
+            // Ask NT for the ACTUAL next expiry of this product, then resolve that exact contract.
+            // MasterInstrument.GetNextExpiry(DateTime) via reflection so it compiles across NT versions.
+            try
+            {
+                var mi = any.MasterInstrument;
+                var mth = mi.GetType().GetMethod("GetNextExpiry", new[] { typeof(DateTime) });
+                if (mth != null)
+                {
+                    DateTime exp = (DateTime)mth.Invoke(mi, new object[] { DateTime.Now });
+                    string frontName = s + " " + exp.ToString("MM-yy", CultureInfo.InvariantCulture);
+                    NinjaTrader.Cbi.Instrument front = null;
+                    try { front = NinjaTrader.Cbi.Instrument.GetInstrument(frontName); } catch { }
+                    if (front != null)
+                    {
+                        Print("WebBridge resolve: '" + s + "' -> " + frontName + " (front month)");
+                        return front;
+                    }
+                }
+                else Print("WebBridge resolve: GetNextExpiry not on MasterInstrument — using " + any.FullName);
+            }
+            catch (Exception ex) { Print("WebBridge resolve: front-month lookup failed: " + ex.Message); }
+
+            Print("WebBridge resolve: '" + s + "' -> " + any.FullName + " (first listed; verify it has data)");
+            return any;
         }
 
         private void SwitchInstrument(string name)
