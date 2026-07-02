@@ -65,8 +65,9 @@
     <div class="modal-card">
       <div class="modal-head"><span>Switch instrument</span><button id="sym-close" class="tbtn">✕</button></div>
       <div class="modal-body">
-        <input id="sym-input" placeholder="ES, NQ, 6E, GC…  (or full ES 09-26)" autocomplete="off" autocapitalize="characters"
+        <input id="sym-input" list="sym-list" placeholder="ES, NQ, 6E, GC…  (or full ES 09-26)" autocomplete="off" autocapitalize="characters"
           style="width:100%;box-sizing:border-box;padding:9px;background:#0e0f12;color:#d7d9dd;border:1px solid #2c2f36;border-radius:6px;font:inherit;" />
+        <datalist id="sym-list"></datalist>
         <div style="margin-top:10px;text-align:right;"><button id="sym-go" class="tbtn on">Switch</button></div>
         <div id="sym-note" class="dim" style="margin-top:8px;font-size:11px;">Type a root (front month) or a full contract name. Changes the NinjaTrader chart this bridge is on.</div>
       </div>

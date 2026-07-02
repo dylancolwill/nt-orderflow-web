@@ -204,6 +204,44 @@
   var elSymClose = document.getElementById('sym-close');
   var elSymGo = document.getElementById('sym-go');
 
+  // Common futures roots for autocomplete (roots resolve to the front month in WebBridge).
+  var COMMON_INSTRUMENTS = [
+    ['ES', 'E-mini S&P 500'], ['MES', 'Micro E-mini S&P 500'],
+    ['NQ', 'E-mini Nasdaq-100'], ['MNQ', 'Micro E-mini Nasdaq-100'],
+    ['RTY', 'E-mini Russell 2000'], ['M2K', 'Micro E-mini Russell 2000'],
+    ['YM', 'E-mini Dow'], ['MYM', 'Micro E-mini Dow'],
+    ['CL', 'Crude Oil'], ['MCL', 'Micro Crude Oil'], ['NG', 'Natural Gas'], ['RB', 'RBOB Gasoline'], ['HO', 'Heating Oil'],
+    ['GC', 'Gold'], ['MGC', 'Micro Gold'], ['SI', 'Silver'], ['HG', 'Copper'], ['PL', 'Platinum'],
+    ['ZB', '30-Year T-Bond'], ['UB', 'Ultra T-Bond'], ['ZN', '10-Year T-Note'], ['ZF', '5-Year T-Note'], ['ZT', '2-Year T-Note'],
+    ['6E', 'Euro FX'], ['6A', 'Australian Dollar'], ['6B', 'British Pound'], ['6C', 'Canadian Dollar'],
+    ['6J', 'Japanese Yen'], ['6S', 'Swiss Franc'], ['6N', 'New Zealand Dollar'], ['DX', 'US Dollar Index'],
+    ['ZC', 'Corn'], ['ZS', 'Soybeans'], ['ZW', 'Wheat'], ['ZL', 'Soybean Oil'], ['ZM', 'Soybean Meal'],
+    ['LE', 'Live Cattle'], ['HE', 'Lean Hogs'], ['MBT', 'Micro Bitcoin'],
+  ];
+  var NAME_BY_SYM = {};
+  COMMON_INSTRUMENTS.forEach(function (r) { NAME_BY_SYM[r[0]] = r[1]; });
+
+  function getRecents() {
+    try { return JSON.parse(localStorage.getItem('ofw_recent_syms') || '[]'); } catch (e) { return []; }
+  }
+  function addRecent(sym) {
+    var r = getRecents().filter(function (s) { return s !== sym; });
+    r.unshift(sym);
+    try { localStorage.setItem('ofw_recent_syms', JSON.stringify(r.slice(0, 6))); } catch (e) {}
+  }
+  function rebuildSymList() {
+    var list = document.getElementById('sym-list');
+    var recents = getRecents();
+    var seen = {};
+    var html = '';
+    recents.concat(COMMON_INSTRUMENTS.map(function (r) { return r[0]; })).forEach(function (sym) {
+      if (seen[sym]) return; seen[sym] = 1;
+      var name = NAME_BY_SYM[sym] || '';
+      html += '<option value="' + sym + '">' + (name ? name : '') + '</option>';
+    });
+    list.innerHTML = html;
+  }
+
   function sendCommand(obj) {
     try { if (ws && ws.readyState === 1) { ws.send(JSON.stringify(obj)); return true; } } catch (e) {}
     return false;
@@ -212,9 +250,10 @@
     var v = (elSymInput.value || '').trim();
     if (!v) return;
     sendCommand({ type: 'command', cmd: 'setInstrument', value: v });
+    addRecent(v.toUpperCase());
     elSymModal.classList.add('hidden');
   }
-  elSymBtn.addEventListener('click', function () { elSymModal.classList.remove('hidden'); elSymInput.focus(); elSymInput.select(); });
+  elSymBtn.addEventListener('click', function () { rebuildSymList(); elSymModal.classList.remove('hidden'); elSymInput.focus(); elSymInput.select(); });
   elSymClose.addEventListener('click', function () { elSymModal.classList.add('hidden'); });
   elSymModal.addEventListener('click', function (e) { if (e.target === elSymModal) elSymModal.classList.add('hidden'); });
   elSymGo.addEventListener('click', submitSwitch);
