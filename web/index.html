@@ -49,15 +49,28 @@
       <span id="dot"></span>
       <span id="sym">—</span>
       <span id="status">connecting…</span>
+      <button id="acct-btn" class="tbtn">$</button>
+      <button id="sym-btn" class="tbtn">⇄</button>
       <button id="fp-btn" class="tbtn on">FP</button>
       <button id="vp-btn" class="tbtn on">VP</button>
       <button id="cvd-btn" class="tbtn on">CVD</button>
       <button id="tbl-btn" class="tbtn">TBL</button>
       <button id="lvl-btn" class="tbtn on">LVL</button>
-      <button id="acct-btn" class="tbtn">$</button>
       <span id="age"></span>
     </div>
     <div id="chart"></div>
+  </div>
+
+  <div id="sym-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head"><span>Switch instrument</span><button id="sym-close" class="tbtn">✕</button></div>
+      <div class="modal-body">
+        <input id="sym-input" placeholder="ES, NQ, 6E, GC…  (or full ES 09-26)" autocomplete="off" autocapitalize="characters"
+          style="width:100%;box-sizing:border-box;padding:9px;background:#0e0f12;color:#d7d9dd;border:1px solid #2c2f36;border-radius:6px;font:inherit;" />
+        <div style="margin-top:10px;text-align:right;"><button id="sym-go" class="tbtn on">Switch</button></div>
+        <div id="sym-note" class="dim" style="margin-top:8px;font-size:11px;">Type a root (front month) or a full contract name. Changes the NinjaTrader chart this bridge is on.</div>
+      </div>
+    </div>
   </div>
 
   <div id="acct-modal" class="modal hidden">

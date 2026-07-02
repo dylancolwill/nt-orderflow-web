@@ -197,6 +197,30 @@
   elAcctClose.addEventListener('click', function () { elAcctModal.classList.add('hidden'); });
   elAcctModal.addEventListener('click', function (e) { if (e.target === elAcctModal) elAcctModal.classList.add('hidden'); });
 
+  // Switch instrument: send a command up the WebSocket to the relay -> WebBridge -> chart.
+  var elSymBtn = document.getElementById('sym-btn');
+  var elSymModal = document.getElementById('sym-modal');
+  var elSymInput = document.getElementById('sym-input');
+  var elSymClose = document.getElementById('sym-close');
+  var elSymGo = document.getElementById('sym-go');
+
+  function sendCommand(obj) {
+    try { if (ws && ws.readyState === 1) { ws.send(JSON.stringify(obj)); return true; } } catch (e) {}
+    return false;
+  }
+  function submitSwitch() {
+    var v = (elSymInput.value || '').trim();
+    if (!v) return;
+    sendCommand({ type: 'command', cmd: 'setInstrument', value: v });
+    elSymModal.classList.add('hidden');
+  }
+  elSymBtn.addEventListener('click', function () { elSymModal.classList.remove('hidden'); elSymInput.focus(); elSymInput.select(); });
+  elSymClose.addEventListener('click', function () { elSymModal.classList.add('hidden'); });
+  elSymModal.addEventListener('click', function (e) { if (e.target === elSymModal) elSymModal.classList.add('hidden'); });
+  elSymGo.addEventListener('click', submitSwitch);
+  elSymInput.addEventListener('input', function () { this.value = this.value.toUpperCase(); });
+  elSymInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') submitSwitch(); });
+
   var didFit = false;
   var lastTick = null;
 

@@ -1,6 +1,6 @@
 // Minimal service worker: cache the app shell so the PWA opens instantly / offline.
 // Live data always comes over the WebSocket, never cached.
-var CACHE = 'orderflow-v14';
+var CACHE = 'orderflow-v16';
 var SHELL = ['/', '/index.html', '/app.js', '/footprint-primitive.js', '/vp-primitive.js', '/table-primitive.js', '/draw-primitive.js', '/manifest.webmanifest', '/icon.svg'];
 
 self.addEventListener('install', function (e) {
