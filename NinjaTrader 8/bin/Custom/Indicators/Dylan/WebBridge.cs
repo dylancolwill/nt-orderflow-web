@@ -538,15 +538,31 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
             string s = (input ?? "").Trim().ToUpperInvariant();
             if (s.Length == 0) return null;
 
+            // Try exact name first (e.g. "ES 09-26", stocks, forex).
             NinjaTrader.Cbi.Instrument inst = null;
             try { inst = NinjaTrader.Cbi.Instrument.GetInstrument(s); } catch { }
             if (inst != null) return inst;
 
-            // Bare futures root: reuse the current chart's expiry (e.g. "NQ" -> "NQ 09-26").
-            if (!s.Contains(" ") && Instrument != null && Instrument.Expiry > new DateTime(1900, 1, 1))
+            if (!s.Contains(" "))
             {
-                string exp = Instrument.Expiry.ToString("MM-yy", CultureInfo.InvariantCulture);
-                try { inst = NinjaTrader.Cbi.Instrument.GetInstrument(s + " " + exp); } catch { }
+                // Fast path: same expiry cycle as the current chart (ES -> NQ, ES -> YM, etc.).
+                if (Instrument != null && Instrument.Expiry > new DateTime(1900, 1, 1))
+                {
+                    string exp = Instrument.Expiry.ToString("MM-yy", CultureInfo.InvariantCulture);
+                    try { inst = NinjaTrader.Cbi.Instrument.GetInstrument(s + " " + exp); } catch { }
+                    if (inst != null) return inst;
+                }
+
+                // Scan upcoming months to find the front-month contract for any futures root
+                // (handles different expiry cycles: GC, CL, 6E, NG, etc.).
+                DateTime now = DateTime.Now;
+                for (int offset = 0; offset < 12; offset++)
+                {
+                    string exp = new DateTime(now.Year, now.Month, 1).AddMonths(offset)
+                                     .ToString("MM-yy", CultureInfo.InvariantCulture);
+                    try { inst = NinjaTrader.Cbi.Instrument.GetInstrument(s + " " + exp); } catch { }
+                    if (inst != null) return inst;
+                }
             }
             return inst;
         }
