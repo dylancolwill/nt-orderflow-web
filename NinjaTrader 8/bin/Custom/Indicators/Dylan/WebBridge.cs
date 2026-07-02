@@ -559,17 +559,21 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
                 if (inst == null) { Print("WebBridge: unknown instrument '" + name + "'"); return; }
 
                 var cc = ChartControl;
-                if (cc == null) return;
-                cc.Dispatcher.InvokeAsync(() =>
+                if (cc == null) { Print("WebBridge: no ChartControl"); return; }
+
+                bool ok = false;
+                string uiError = null;
+                cc.Dispatcher.Invoke(() =>
                 {
                     try
                     {
                         object win = Window.GetWindow(cc);
-                        bool ok = TrySetChartInstrument(win, cc, inst);
-                        Print("WebBridge: switch -> " + name + (ok ? " OK" : " (no Instrument setter found — report this)"));
+                        ok = TrySetChartInstrument(win, cc, inst);
                     }
-                    catch (Exception ex) { Print("WebBridge switch(ui) error: " + ex.Message); }
+                    catch (Exception ex) { uiError = ex.Message; }
                 });
+                if (uiError != null) Print("WebBridge switch(ui) error: " + uiError);
+                else Print("WebBridge: switch -> " + name + (ok ? " OK" : " (no Instrument setter found — report this)"));
             }
             catch (Exception ex) { Print("WebBridge switch error: " + ex.Message); }
         }
