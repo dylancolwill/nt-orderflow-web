@@ -6,9 +6,13 @@ using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using System.Linq;
 using System.Net.Http;
+using System.Reflection;
 using System.Text;
 using System.Threading;
+using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
+using NinjaTrader.Cbi;
 using NinjaTrader.Data;
 using NinjaTrader.Gui;
 using NinjaTrader.NinjaScript;
@@ -64,6 +68,9 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
         // Hand-drawn levels/zones/trendlines, scanned from the chart's DrawObjects. Prebuilt JSON.
         private string   _drawJson = "";
         private DateTime _lastLevelScan = DateTime.MinValue;
+
+        // Connected accounts + realized/unrealized PnL. Prebuilt JSON, refreshed with the level scan.
+        private string _accountsJson = "";
 
         // Historical-footprint diagnostics (EnableDebug)
         private long _dbgHistCalls, _dbgHistTicks, _dbgHistBuy, _dbgHistSell, _dbgHistSkip, _dbgHistZeroQuote;
@@ -164,6 +171,7 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
                 {
                     _lastLevelScan = DateTime.Now;
                     ScanDrawings();
+                    ScanAccounts();
                 }
             }
             // ── 1-tick series — accumulate footprint ──────────────────────────
@@ -228,6 +236,44 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
 
             string j = "\"draw\":{\"levels\":[" + lv + "],\"zones\":[" + zn + "],\"trends\":[" + tr + "]}";
             lock (_lock) { _drawJson = j; }
+        }
+
+        // ─── Accounts / PnL (NT data thread) ─────────────────────────────────────
+        private void ScanAccounts()
+        {
+            var sb = new StringBuilder();
+            bool first = true;
+            try
+            {
+                lock (Account.All)
+                {
+                    foreach (Account acc in Account.All)
+                    {
+                        try
+                        {
+                            bool connected = acc.Connection != null && acc.Connection.Status == ConnectionStatus.Connected;
+                            double realized   = acc.Get(AccountItem.RealizedProfitLoss, acc.Denomination);
+                            double netliq     = acc.Get(AccountItem.NetLiquidation,     acc.Denomination);
+                            double unrealized = 0;
+                            lock (acc.Positions)
+                                foreach (Position p in acc.Positions)
+                                    unrealized += p.GetUnrealizedProfitLoss(PerformanceUnit.Currency);
+
+                            if (!first) sb.Append(','); first = false;
+                            sb.Append("{\"name\":"); AppendJsonString(sb, acc.Name);
+                            sb.Append(",\"connected\":").Append(connected ? "true" : "false");
+                            sb.Append(",\"realized\":").Append(realized.ToString(CultureInfo.InvariantCulture));
+                            sb.Append(",\"unrealized\":").Append(unrealized.ToString(CultureInfo.InvariantCulture));
+                            sb.Append(",\"netliq\":").Append(netliq.ToString(CultureInfo.InvariantCulture));
+                            sb.Append('}');
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch { return; }
+
+            lock (_lock) { _accountsJson = "\"accounts\":[" + sb + "]"; }
         }
 
         private void AppendLevel(StringBuilder sb, ref bool first, double price, Stroke stroke, string tag)
@@ -456,16 +502,103 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
                     req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + AuthToken);
 
                     var resp = _http.SendAsync(req).GetAwaiter().GetResult();
+                    string respBody = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
                     if (EnableDebug)
                         Print(string.Format("WebBridge [post] {0} bytes -> {1}",
                               payload.Length, (int)resp.StatusCode));
                     resp.Dispose();
+                    HandleCommandResponse(respBody);
                 }
             }
             catch (Exception ex)
             {
                 if (EnableDebug) Print("WebBridge [post error] " + ex.Message);
             }
+        }
+
+        // ─── Reverse channel: commands from the web (NT timer thread) ─────────────
+        // The relay returns pending commands in the /ingest response, e.g. {"setInstrument":"NQ 09-26"}.
+        private void HandleCommandResponse(string body)
+        {
+            if (string.IsNullOrEmpty(body)) return;
+            const string key = "\"setInstrument\":\"";
+            int i = body.IndexOf(key, StringComparison.Ordinal);
+            if (i < 0) return;
+            i += key.Length;
+            int j = body.IndexOf('"', i);
+            if (j < 0) return;
+            string name = body.Substring(i, j - i);
+            if (!string.IsNullOrEmpty(name)) SwitchInstrument(name);
+        }
+
+        // Resolve a user-typed value to an instrument. Accepts full names ("ES 09-26"), stocks/forex,
+        // or a bare futures root ("es", "6e", "nq") which is mapped to the current chart's contract month.
+        private NinjaTrader.Cbi.Instrument ResolveInstrument(string input)
+        {
+            string s = (input ?? "").Trim().ToUpperInvariant();
+            if (s.Length == 0) return null;
+
+            NinjaTrader.Cbi.Instrument inst = null;
+            try { inst = NinjaTrader.Cbi.Instrument.GetInstrument(s); } catch { }
+            if (inst != null) return inst;
+
+            // Bare futures root: reuse the current chart's expiry (e.g. "NQ" -> "NQ 09-26").
+            if (!s.Contains(" ") && Instrument != null && Instrument.Expiry > new DateTime(1900, 1, 1))
+            {
+                string exp = Instrument.Expiry.ToString("MM-yy", CultureInfo.InvariantCulture);
+                try { inst = NinjaTrader.Cbi.Instrument.GetInstrument(s + " " + exp); } catch { }
+            }
+            return inst;
+        }
+
+        private void SwitchInstrument(string name)
+        {
+            try
+            {
+                NinjaTrader.Cbi.Instrument inst = ResolveInstrument(name);
+                if (inst == null) { Print("WebBridge: unknown instrument '" + name + "'"); return; }
+
+                var cc = ChartControl;
+                if (cc == null) return;
+                cc.Dispatcher.InvokeAsync(() =>
+                {
+                    try
+                    {
+                        object win = Window.GetWindow(cc);
+                        bool ok = TrySetChartInstrument(win, cc, inst);
+                        Print("WebBridge: switch -> " + name + (ok ? " OK" : " (no Instrument setter found — report this)"));
+                    }
+                    catch (Exception ex) { Print("WebBridge switch(ui) error: " + ex.Message); }
+                });
+            }
+            catch (Exception ex) { Print("WebBridge switch error: " + ex.Message); }
+        }
+
+        // Find this chart's ChartTab in the chart window and set its Instrument (via reflection, so it
+        // compiles regardless of the exact API). Falls back to a window-level Instrument setter.
+        private bool TrySetChartInstrument(object chartWindow, object chartControl, NinjaTrader.Cbi.Instrument inst)
+        {
+            if (chartWindow == null) return false;
+
+            var mtcProp = chartWindow.GetType().GetProperty("MainTabControl");
+            var mtc = mtcProp != null ? mtcProp.GetValue(chartWindow) as TabControl : null;
+            if (mtc != null)
+            {
+                foreach (object item in mtc.Items)
+                {
+                    object content = (item as TabItem) != null ? ((TabItem)item).Content : item;
+                    if (content == null) continue;
+                    var ccProp = content.GetType().GetProperty("ChartControl");
+                    object cc = ccProp != null ? ccProp.GetValue(content) : null;
+                    if (!ReferenceEquals(cc, chartControl)) continue;
+                    var instProp = content.GetType().GetProperty("Instrument");
+                    if (instProp != null && instProp.CanWrite) { instProp.SetValue(content, inst); return true; }
+                }
+            }
+
+            var winInst = chartWindow.GetType().GetProperty("Instrument");
+            if (winInst != null && winInst.CanWrite) { winInst.SetValue(chartWindow, inst); return true; }
+            return false;
         }
 
         // Build the snapshot under _lock (caller holds it). Manual JSON to avoid serializer deps.
@@ -582,6 +715,9 @@ namespace NinjaTrader.NinjaScript.Indicators.Dylan
 
             // draw: hand-drawn levels / zones / trendlines (prebuilt on the data thread).
             if (_drawJson.Length > 0) sb.Append(',').Append(_drawJson);
+
+            // accounts: connected accounts + realized/unrealized PnL.
+            if (_accountsJson.Length > 0) sb.Append(',').Append(_accountsJson);
 
             sb.Append('}');
             return sb.ToString();

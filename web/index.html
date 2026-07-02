@@ -26,6 +26,21 @@
       font: inherit; font-size: 12px; }
     .tbtn.on { background: #233; color: #4fd1c5; border-color: #2c5; }
     #chart { flex: 1 1 auto; min-height: 0; }
+    .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+      display: flex; align-items: center; justify-content: center; z-index: 50; }
+    .modal.hidden { display: none; }
+    .modal-card { background: #15171b; border: 1px solid #23262c; border-radius: 10px;
+      width: min(560px, 94vw); max-height: 80vh; overflow: auto; }
+    .modal-head { display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 12px; border-bottom: 1px solid #23262c; font-weight: 600; }
+    .modal-body { padding: 8px 12px 12px; }
+    table.acct { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    table.acct th, table.acct td { text-align: right; padding: 6px 8px; border-bottom: 1px solid #1f2228; white-space: nowrap; }
+    table.acct th:first-child, table.acct td:first-child { text-align: left; }
+    table.acct th { color: #8a8f98; font-weight: 500; font-size: 11px; }
+    .pos { color: #26a69a; } .neg { color: #ef5350; } .dim { color: #6a6f78; }
+    .dot2 { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #c0392b; margin-right: 6px; }
+    .dot2.ok { background: #27ae60; }
   </style>
 </head>
 <body>
@@ -34,6 +49,8 @@
       <span id="dot"></span>
       <span id="sym">—</span>
       <span id="status">connecting…</span>
+      <button id="acct-btn" class="tbtn">$</button>
+      <button id="sym-btn" class="tbtn">⇄</button>
       <button id="fp-btn" class="tbtn on">FP</button>
       <button id="vp-btn" class="tbtn on">VP</button>
       <button id="cvd-btn" class="tbtn on">CVD</button>
@@ -42,6 +59,26 @@
       <span id="age"></span>
     </div>
     <div id="chart"></div>
+  </div>
+
+  <div id="sym-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head"><span>Switch instrument</span><button id="sym-close" class="tbtn">✕</button></div>
+      <div class="modal-body">
+        <input id="sym-input" list="sym-list" placeholder="ES, NQ, 6E, GC…  (or full ES 09-26)" autocomplete="off" autocapitalize="characters"
+          style="width:100%;box-sizing:border-box;padding:9px;background:#0e0f12;color:#d7d9dd;border:1px solid #2c2f36;border-radius:6px;font:inherit;" />
+        <datalist id="sym-list"></datalist>
+        <div style="margin-top:10px;text-align:right;"><button id="sym-go" class="tbtn on">Switch</button></div>
+        <div id="sym-note" class="dim" style="margin-top:8px;font-size:11px;">Type a root (front month) or a full contract name. Changes the NinjaTrader chart this bridge is on.</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="acct-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head"><span>Accounts</span><button id="acct-close" class="tbtn">✕</button></div>
+      <div id="acct-body" class="modal-body"></div>
+    </div>
   </div>
 
   <!-- TradingView Lightweight Charts v4 (standalone). v4 has addCandlestickSeries(); -->

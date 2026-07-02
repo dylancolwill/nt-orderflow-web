@@ -18,6 +18,7 @@ Deploy notes:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
 
@@ -34,6 +35,10 @@ app = FastAPI(title="orderflow-web relay")
 _latest: dict | None = None
 _clients: set[WebSocket] = set()
 _clients_lock = asyncio.Lock()
+
+# Reverse channel: latest pending "switch instrument" request from a web client. Delivered to the
+# NinjaTrader WebBridge in the next /ingest response, then cleared.
+_pending_instrument: str | None = None
 
 
 def _check_auth(request: Request) -> None:
@@ -67,7 +72,12 @@ async def ingest(request: Request):
             for ws in dead:
                 _clients.discard(ws)
 
-    return {"ok": True, "clients": len(targets) - len(dead)}
+    global _pending_instrument
+    resp = {"ok": True, "clients": len(targets) - len(dead)}
+    if _pending_instrument:
+        resp["setInstrument"] = _pending_instrument
+        _pending_instrument = None
+    return resp
 
 
 @app.websocket("/stream")
@@ -78,10 +88,19 @@ async def stream(ws: WebSocket):
     try:
         if _latest is not None:
             await ws.send_json(_latest)
-        # Keep the socket open. We don't expect client messages in v1, but reading
-        # lets us detect disconnects promptly (and reserves the reverse channel).
+        # Read client messages: detect disconnects and accept reverse-channel commands
+        # (e.g. {"type":"command","cmd":"setInstrument","value":"NQ 09-26"}).
+        global _pending_instrument
         while True:
-            await ws.receive_text()
+            msg = await ws.receive_text()
+            try:
+                data = json.loads(msg)
+                if isinstance(data, dict) and data.get("cmd") == "setInstrument":
+                    val = (data.get("value") or "").strip()
+                    if val:
+                        _pending_instrument = val
+            except Exception:
+                pass
     except WebSocketDisconnect:
         pass
     except Exception:

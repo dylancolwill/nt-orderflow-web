@@ -164,6 +164,102 @@
     applyDraw();   // re-render with remembered data
   });
 
+  // Accounts popup: connected accounts + realized/unrealized PnL.
+  var elAcctBtn = document.getElementById('acct-btn');
+  var elAcctModal = document.getElementById('acct-modal');
+  var elAcctBody = document.getElementById('acct-body');
+  var elAcctClose = document.getElementById('acct-close');
+  var latestAccounts = [];
+
+  function fmtMoney(n) {
+    return (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function moneyCls(n) { return n > 0 ? 'pos' : n < 0 ? 'neg' : 'dim'; }
+  function escapeHtml(s) { return (s || '').replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+  function renderAccounts() {
+    if (!latestAccounts.length) { elAcctBody.innerHTML = '<div class="dim">No accounts.</div>'; return; }
+    var rows = latestAccounts.map(function (a) {
+      var total = a.realized + a.unrealized;
+      return '<tr>'
+        + '<td><span class="dot2' + (a.connected ? ' ok' : '') + '"></span>' + escapeHtml(a.name) + '</td>'
+        + '<td class="' + moneyCls(a.realized) + '">' + fmtMoney(a.realized) + '</td>'
+        + '<td class="' + moneyCls(a.unrealized) + '">' + fmtMoney(a.unrealized) + '</td>'
+        + '<td class="' + moneyCls(total) + '">' + fmtMoney(total) + '</td>'
+        + '<td class="dim">' + fmtMoney(a.netliq) + '</td>'
+        + '</tr>';
+    }).join('');
+    elAcctBody.innerHTML = '<table class="acct"><thead><tr><th>Account</th><th>Realized</th><th>Unreal.</th>'
+      + '<th>Total</th><th>Net Liq</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  elAcctBtn.addEventListener('click', function () { elAcctModal.classList.remove('hidden'); renderAccounts(); });
+  elAcctClose.addEventListener('click', function () { elAcctModal.classList.add('hidden'); });
+  elAcctModal.addEventListener('click', function (e) { if (e.target === elAcctModal) elAcctModal.classList.add('hidden'); });
+
+  // Switch instrument: send a command up the WebSocket to the relay -> WebBridge -> chart.
+  var elSymBtn = document.getElementById('sym-btn');
+  var elSymModal = document.getElementById('sym-modal');
+  var elSymInput = document.getElementById('sym-input');
+  var elSymClose = document.getElementById('sym-close');
+  var elSymGo = document.getElementById('sym-go');
+
+  // Common futures roots for autocomplete (roots resolve to the front month in WebBridge).
+  var COMMON_INSTRUMENTS = [
+    ['ES', 'E-mini S&P 500'], ['MES', 'Micro E-mini S&P 500'],
+    ['NQ', 'E-mini Nasdaq-100'], ['MNQ', 'Micro E-mini Nasdaq-100'],
+    ['RTY', 'E-mini Russell 2000'], ['M2K', 'Micro E-mini Russell 2000'],
+    ['YM', 'E-mini Dow'], ['MYM', 'Micro E-mini Dow'],
+    ['CL', 'Crude Oil'], ['MCL', 'Micro Crude Oil'], ['NG', 'Natural Gas'], ['RB', 'RBOB Gasoline'], ['HO', 'Heating Oil'],
+    ['GC', 'Gold'], ['MGC', 'Micro Gold'], ['SI', 'Silver'], ['HG', 'Copper'], ['PL', 'Platinum'],
+    ['ZB', '30-Year T-Bond'], ['UB', 'Ultra T-Bond'], ['ZN', '10-Year T-Note'], ['ZF', '5-Year T-Note'], ['ZT', '2-Year T-Note'],
+    ['6E', 'Euro FX'], ['6A', 'Australian Dollar'], ['6B', 'British Pound'], ['6C', 'Canadian Dollar'],
+    ['6J', 'Japanese Yen'], ['6S', 'Swiss Franc'], ['6N', 'New Zealand Dollar'], ['DX', 'US Dollar Index'],
+    ['ZC', 'Corn'], ['ZS', 'Soybeans'], ['ZW', 'Wheat'], ['ZL', 'Soybean Oil'], ['ZM', 'Soybean Meal'],
+    ['LE', 'Live Cattle'], ['HE', 'Lean Hogs'], ['MBT', 'Micro Bitcoin'],
+  ];
+  var NAME_BY_SYM = {};
+  COMMON_INSTRUMENTS.forEach(function (r) { NAME_BY_SYM[r[0]] = r[1]; });
+
+  function getRecents() {
+    try { return JSON.parse(localStorage.getItem('ofw_recent_syms') || '[]'); } catch (e) { return []; }
+  }
+  function addRecent(sym) {
+    var r = getRecents().filter(function (s) { return s !== sym; });
+    r.unshift(sym);
+    try { localStorage.setItem('ofw_recent_syms', JSON.stringify(r.slice(0, 6))); } catch (e) {}
+  }
+  function rebuildSymList() {
+    var list = document.getElementById('sym-list');
+    var recents = getRecents();
+    var seen = {};
+    var html = '';
+    recents.concat(COMMON_INSTRUMENTS.map(function (r) { return r[0]; })).forEach(function (sym) {
+      if (seen[sym]) return; seen[sym] = 1;
+      var name = NAME_BY_SYM[sym] || '';
+      html += '<option value="' + sym + '">' + (name ? name : '') + '</option>';
+    });
+    list.innerHTML = html;
+  }
+
+  function sendCommand(obj) {
+    try { if (ws && ws.readyState === 1) { ws.send(JSON.stringify(obj)); return true; } } catch (e) {}
+    return false;
+  }
+  function submitSwitch() {
+    var v = (elSymInput.value || '').trim();
+    if (!v) return;
+    sendCommand({ type: 'command', cmd: 'setInstrument', value: v });
+    addRecent(v.toUpperCase());
+    elSymModal.classList.add('hidden');
+  }
+  elSymBtn.addEventListener('click', function () { rebuildSymList(); elSymModal.classList.remove('hidden'); elSymInput.focus(); elSymInput.select(); });
+  elSymClose.addEventListener('click', function () { elSymModal.classList.add('hidden'); });
+  elSymModal.addEventListener('click', function (e) { if (e.target === elSymModal) elSymModal.classList.add('hidden'); });
+  elSymGo.addEventListener('click', submitSwitch);
+  elSymInput.addEventListener('input', function () { this.value = this.value.toUpperCase(); });
+  elSymInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') submitSwitch(); });
+
   var didFit = false;
   var lastTick = null;
 
@@ -195,6 +291,10 @@
     applyCvd(snap.cvd);
     applyTable(snap.bars, snap.cvd);
     applyDraw(snap.draw || null);
+    if (snap.accounts) {
+      latestAccounts = snap.accounts;
+      if (!elAcctModal.classList.contains('hidden')) renderAccounts();
+    }
     if (!didFit) { chart.timeScale().fitContent(); didFit = true; }
     lastUpdate = Date.now();
   }
