@@ -262,6 +262,7 @@
 
   var didFit = false;
   var lastTick = null;
+  var lastInstrument = null;
 
   // Set price precision from the instrument tick size so the axis/crosshair show the full price
   // (e.g. 6E ticks at 0.00005 -> 5 decimals) instead of the default 2.
@@ -277,6 +278,12 @@
   function applySnapshot(snap) {
     if (!snap || !snap.bars || !snap.bars.length) return;
     if (snap.instrument) elSym.textContent = snap.instrument;
+    if (snap.instrument && snap.instrument !== lastInstrument) {
+      lastInstrument = snap.instrument;
+      didFit = false;   // re-fit when the instrument changes
+      lastTick = null;  // re-apply price format for the new instrument
+      vpLines = null;   // recreate VAH/VAL lines for the new price range
+    }
     applyPriceFormat(snap.tickSize);
 
     var data = new Array(snap.bars.length);

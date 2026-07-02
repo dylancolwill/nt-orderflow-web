@@ -76,6 +76,7 @@ async def ingest(request: Request):
     resp = {"ok": True, "clients": len(targets) - len(dead)}
     if _pending_instrument:
         resp["setInstrument"] = _pending_instrument
+        print(f"[ingest] delivering setInstrument -> {_pending_instrument!r}", flush=True)
         _pending_instrument = None
     return resp
 
@@ -99,6 +100,7 @@ async def stream(ws: WebSocket):
                     val = (data.get("value") or "").strip()
                     if val:
                         _pending_instrument = val
+                        print(f"[stream] setInstrument -> {val!r}", flush=True)
             except Exception:
                 pass
     except WebSocketDisconnect:
